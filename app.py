@@ -13,6 +13,7 @@ from scraper import get_output_path, run_scrape
 app = Flask(__name__)
 RESULTS_DIR = "./scraping-results"
 VALID_SOURCE_MODES = {"hybrid", "threads_api", "apify"}
+MAX_KEYWORDS = 10
 
 
 @app.route("/")
@@ -48,6 +49,8 @@ def api_scrape():
     keywords = parse_keywords(data.get("keywords"))
     if not keywords:
         return jsonify({"error": "유효한 키워드가 없습니다."}), 400
+    if len(keywords) > MAX_KEYWORDS:
+        return jsonify({"error": f"키워드는 최대 {MAX_KEYWORDS}개까지 입력할 수 있습니다."}), 400
 
     try:
         max_results = parse_max_results(data.get("max_results", 20))
@@ -61,8 +64,10 @@ def api_scrape():
 
     try:
         output = run_scrape(keywords, max_results, korean_only, source_mode)
-    except Exception as e:
-        return jsonify({"error": f"수집 중 오류 발생: {str(e)}"}), 500
+    except Exception:
+        # Log server-side; return a generic message so internals aren't exposed.
+        app.logger.exception("run_scrape failed")
+        return jsonify({"error": "수집 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."}), 500
 
     if output["data"]:
         os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -122,8 +127,9 @@ def api_result(filename):
         with fpath.open("r", encoding="utf-8") as f:
             data = json.load(f)
         return jsonify(data)
-    except (json.JSONDecodeError, OSError) as e:
-        return jsonify({"error": f"파일 읽기 오류: {str(e)}"}), 500
+    except (json.JSONDecodeError, OSError):
+        app.logger.exception("failed to read result file")
+        return jsonify({"error": "파일을 읽는 중 오류가 발생했습니다."}), 500
 
 
 if __name__ == "__main__":

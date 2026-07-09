@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -28,6 +29,12 @@ THREADS_BASE = "https://graph.threads.net/v1.0"
 THREADS_FIELDS = "id,text,media_type,permalink,timestamp,username,has_replies,is_quote_post,is_reply"
 DEFAULT_RESULTS_DIR = "./scraping-results"
 
+# Bounds so a hung/queued Apify Actor run cannot block the request indefinitely.
+APIFY_TIMEOUT_SECS = int(os.environ.get("APIFY_TIMEOUT_SECS", "120") or "120")
+APIFY_WAIT_SECS = int(os.environ.get("APIFY_WAIT_SECS", "150") or "150")
+
+_NUM_RE = re.compile(r"[-+]?\d*\.?\d+")
+
 
 def contains_korean(text: str, min_ratio: float = 0.05) -> bool:
     """텍스트에 한국어가 포함되어 있는지 판별한다."""
@@ -38,6 +45,108 @@ def contains_korean(text: str, min_ratio: float = 0.05) -> bool:
     if not alpha_chars:
         return False
     return len(hangul_chars) / len(alpha_chars) >= min_ratio
+
+
+def parse_engagement_int(value: Any) -> int:
+    """Robustly parse an engagement count that may arrive as an int/float or a
+    string with separators or magnitude suffixes.
+
+    Handles thousands separators (``1,234``), and k/K, m/M, 만 magnitude
+    suffixes (``1.2k`` -> 1200, ``3만`` -> 30000). Anything unparseable or
+    negative collapses to 0 so downstream sorting/summing never breaks.
+    """
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value) if value > 0 else 0
+    if not isinstance(value, str):
+        return 0
+
+    s = value.strip().replace(",", "").replace(" ", "")
+    if not s:
+        return 0
+
+    multiplier = 1.0
+    lowered = s.lower()
+    if s.endswith("만"):
+        multiplier, s = 10000.0, s[:-1]
+    elif lowered.endswith("k"):
+        multiplier, s = 1000.0, s[:-1]
+    elif lowered.endswith("m"):
+        multiplier, s = 1000000.0, s[:-1]
+
+    match = _NUM_RE.search(s)
+    if not match:
+        return 0
+    try:
+        result = int(float(match.group()) * multiplier)
+    except (ValueError, OverflowError):
+        return 0
+    return result if result > 0 else 0
+
+
+def first_media_url(value: Any) -> str:
+    """Return a usable media URL string from Apify's ``media_urls`` field,
+    tolerating non-list shapes (a bare string, a list of dicts, None, etc.)."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        url = value.get("url")
+        return url.strip() if isinstance(url, str) else ""
+    if isinstance(value, (list, tuple)):
+        for entry in value:
+            if isinstance(entry, str) and entry.strip():
+                return entry.strip()
+            if isinstance(entry, dict):
+                url = entry.get("url")
+                if isinstance(url, str) and url.strip():
+                    return url.strip()
+    return ""
+
+
+def apify_run_bound_kwargs(actor_client: Any) -> dict[str, Any]:
+    """Build version-appropriate run/wait bound kwargs for ``ActorClient.call``.
+
+    apify-client v1.x uses ``timeout_secs``/``wait_secs`` (int seconds); v3.x
+    uses ``run_timeout``/``wait_duration`` (``timedelta``). Bounding both means a
+    stuck or queued Actor run cannot block the HTTP request indefinitely.
+    """
+    try:
+        params = inspect.signature(actor_client.call).parameters
+    except (TypeError, ValueError):
+        return {}
+    kwargs: dict[str, Any] = {}
+    if "timeout_secs" in params:
+        kwargs["timeout_secs"] = APIFY_TIMEOUT_SECS
+    elif "run_timeout" in params:
+        kwargs["run_timeout"] = timedelta(seconds=APIFY_TIMEOUT_SECS)
+    if "wait_secs" in params:
+        kwargs["wait_secs"] = APIFY_WAIT_SECS
+    elif "wait_duration" in params:
+        kwargs["wait_duration"] = timedelta(seconds=APIFY_WAIT_SECS)
+    return kwargs
+
+
+def sanitize_api_error(err: Any) -> dict[str, Any]:
+    """Reduce an arbitrary upstream error payload to safe, non-sensitive fields.
+
+    Keeps only code/type/message/status so raw response bodies, tokens embedded
+    in URLs, or stack details are never surfaced to the frontend.
+    """
+    if not isinstance(err, dict):
+        return {"message": "요청 처리 중 오류가 발생했습니다."}
+    inner = err.get("error") if isinstance(err.get("error"), dict) else err
+    safe: dict[str, Any] = {}
+    for key in ("code", "type", "message"):
+        val = inner.get(key)
+        if isinstance(val, (str, int)):
+            safe[key] = val
+    status = err.get("_status", err.get("status"))
+    if isinstance(status, int):
+        safe["status"] = status
+    if not safe:
+        safe["message"] = "요청 처리 중 오류가 발생했습니다."
+    return safe
 
 
 def load_dotenv(path: Path) -> None:
@@ -170,11 +279,15 @@ def scrape_threads_official_api(keyword: str, max_results: int = 20, token: str 
             "status": "partial",
             "mode": "id_only",
             "count": len(rows),
-            "full_fields_error": data.get("error", data),
+            "full_fields_error": sanitize_api_error(data),
         })
         return rows, meta
 
-    meta.update({"status": "error", "error": data2.get("error", data2), "full_fields_error": data.get("error", data)})
+    meta.update({
+        "status": "error",
+        "error": sanitize_api_error(data2),
+        "full_fields_error": sanitize_api_error(data),
+    })
     return [], meta
 
 
@@ -194,7 +307,12 @@ def scrape_threads_apify(keyword: str, max_results: int = 20, korean_only: bool 
     }
 
     try:
-        run = client.actor("themineworks/threads-scraper").call(run_input=run_input)
+        # Bound the Actor run and the wait so a stuck/queued run cannot block the
+        # HTTP request indefinitely.
+        actor_client = client.actor("themineworks/threads-scraper")
+        run = actor_client.call(run_input=run_input, **apify_run_bound_kwargs(actor_client))
+        if not run:
+            raise RuntimeError("Apify run did not finish within the wait bound")
         # apify-client v1/v2 returns a dict-like run object; older examples sometimes
         # show attribute access. Support both so the scraper does not fail after the
         # Actor succeeds.
@@ -205,7 +323,8 @@ def scrape_threads_apify(keyword: str, max_results: int = 20, korean_only: bool 
             raise RuntimeError("Apify run finished but default dataset id was not returned")
         items = list(client.dataset(dataset_id).iterate_items())
     except Exception as e:
-        meta.update({"status": "error", "error": str(e)})
+        # Avoid leaking raw exception text (may embed URLs/tokens); keep the type.
+        meta.update({"status": "error", "error": {"type": type(e).__name__, "message": "Apify 수집 중 오류가 발생했습니다."}})
         return [], meta
 
     posts: list[dict[str, Any]] = []
@@ -214,12 +333,11 @@ def scrape_threads_apify(keyword: str, max_results: int = 20, korean_only: bool 
         if not text:
             continue
 
-        like_count = int(item.get("like_count", 0) or 0)
-        reply_count = int(item.get("reply_count", 0) or 0)
-        repost_count = int(item.get("repost_count", 0) or 0)
-        quote_count = int(item.get("quote_count", 0) or 0)
+        like_count = parse_engagement_int(item.get("like_count"))
+        reply_count = parse_engagement_int(item.get("reply_count"))
+        repost_count = parse_engagement_int(item.get("repost_count"))
+        quote_count = parse_engagement_int(item.get("quote_count"))
         engagement_total = like_count + reply_count + repost_count + quote_count
-        media_urls = item.get("media_urls", []) or []
 
         posts.append({
             "source": "apify",
@@ -232,9 +350,9 @@ def scrape_threads_apify(keyword: str, max_results: int = 20, korean_only: bool 
             "repost_count": repost_count,
             "quote_count": quote_count,
             "engagement_total": engagement_total,
-            "timestamp": item.get("posted_at", ""),
+            "timestamp": item.get("posted_at") or item.get("timestamp") or "",
             "permalink": item.get("url", ""),
-            "media_url": media_urls[0] if media_urls else "",
+            "media_url": first_media_url(item.get("media_urls")),
             "verification_status": "apify_collected_public_page_verification_recommended",
             "notes": "Apify collected text/link/engagement. Verify top rows in browser before publishing insights.",
         })
