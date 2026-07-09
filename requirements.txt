@@ -1,0 +1,4 @@
+scrapling
+jmespath
+nested-lookup
+flask

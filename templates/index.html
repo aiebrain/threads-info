@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Threads 인기글 수집기</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; min-height: 100vh; }
+
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+header { text-align: center; padding: 30px 0 20px; }
+header h1 { font-size: 1.8rem; font-weight: 700; color: #111; }
+header p { color: #666; margin-top: 6px; font-size: 0.95rem; }
+
+/* Search Form */
+.search-card { background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 24px; }
+.form-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-group label { font-size: 0.85rem; font-weight: 600; color: #555; }
+.form-group input[type="text"],
+.form-group input[type="number"] {
+  padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 0.95rem;
+  outline: none; transition: border-color 0.2s;
+}
+.form-group input:focus { border-color: #111; }
+.form-group.keyword { flex: 1; min-width: 200px; }
+.form-group.max-results input { width: 80px; }
+
+.checkbox-group { display: flex; align-items: center; gap: 6px; padding-bottom: 2px; }
+.checkbox-group input[type="checkbox"] { width: 18px; height: 18px; accent-color: #111; }
+.checkbox-group label { font-size: 0.9rem; cursor: pointer; white-space: nowrap; }
+
+.btn { padding: 10px 24px; border: none; border-radius: 8px; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+.btn-primary { background: #111; color: #fff; }
+.btn-primary:hover { background: #333; }
+.btn-primary:disabled { background: #999; cursor: not-allowed; }
+
+/* Loading */
+.loading { display: none; text-align: center; padding: 40px 20px; }
+.loading.active { display: block; }
+.spinner { width: 40px; height: 40px; border: 4px solid #eee; border-top-color: #111; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading p { color: #666; font-size: 0.95rem; }
+
+/* Error */
+.error-msg { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; display: none; }
+.error-msg.active { display: block; }
+
+/* Results */
+.results-section { display: none; }
+.results-section.active { display: block; }
+.results-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
+.results-header h2 { font-size: 1.2rem; }
+.results-meta { font-size: 0.85rem; color: #666; }
+
+.table-wrapper { overflow-x: auto; background: #fff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+thead th { background: #fafafa; padding: 12px 14px; text-align: left; font-weight: 600; color: #555; border-bottom: 2px solid #eee; white-space: nowrap; }
+tbody td { padding: 10px 14px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+tbody tr:hover { background: #fafafa; }
+.col-rank { width: 50px; text-align: center; }
+.col-user { width: 120px; }
+.col-text { min-width: 250px; max-width: 400px; }
+.col-text .text-preview { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.5; word-break: break-word; }
+.col-num { width: 70px; text-align: right; }
+.col-link { width: 60px; text-align: center; }
+.col-link a { color: #111; text-decoration: none; font-weight: 600; }
+.col-link a:hover { text-decoration: underline; }
+
+/* History */
+.history-section { margin-top: 32px; }
+.history-section h2 { font-size: 1.2rem; margin-bottom: 12px; }
+.history-list { background: #fff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; }
+.history-item { padding: 12px 16px; border-bottom: 1px solid #f0f0f0; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.15s; flex-wrap: wrap; gap: 4px; }
+.history-item:last-child { border-bottom: none; }
+.history-item:hover { background: #fafafa; }
+.history-item .hi-name { font-weight: 600; font-size: 0.9rem; }
+.history-item .hi-meta { font-size: 0.8rem; color: #888; }
+.history-empty { padding: 20px; text-align: center; color: #999; font-size: 0.9rem; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .container { padding: 12px; }
+  header h1 { font-size: 1.4rem; }
+  .search-card { padding: 16px; }
+  .form-row { flex-direction: column; }
+  .form-group.keyword { min-width: unset; }
+  .btn { width: 100%; }
+  .col-text { min-width: 180px; }
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>Threads 인기글 수집기</h1>
+    <p>Threads에서 키워드별 인기 게시글을 수집합니다</p>
+  </header>
+
+  <!-- Search Form -->
+  <div class="search-card">
+    <form id="scrapeForm">
+      <div class="form-row">
+        <div class="form-group keyword">
+          <label for="keywords">키워드 (쉼표로 구분)</label>
+          <input type="text" id="keywords" placeholder="예: AI 강사, 인공지능" required>
+        </div>
+        <div class="form-group max-results">
+          <label for="maxResults">최대 건수</label>
+          <input type="number" id="maxResults" value="20" min="1" max="100">
+        </div>
+        <div class="checkbox-group">
+          <input type="checkbox" id="koreanOnly" checked>
+          <label for="koreanOnly">한국어만</label>
+        </div>
+        <button type="submit" class="btn btn-primary" id="scrapeBtn">수집 시작</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Error Message -->
+  <div class="error-msg" id="errorMsg"></div>
+
+  <!-- Loading -->
+  <div class="loading" id="loading">
+    <div class="spinner"></div>
+    <p>수집 중입니다... Threads 페이지를 분석하고 있습니다.</p>
+    <p style="margin-top:8px; font-size:0.8rem; color:#999;">키워드 수에 따라 30초~1분 이상 소요될 수 있습니다.</p>
+  </div>
+
+  <!-- Results Table -->
+  <div class="results-section" id="resultsSection">
+    <div class="results-header">
+      <h2 id="resultsTitle">수집 결과</h2>
+      <span class="results-meta" id="resultsMeta"></span>
+    </div>
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th class="col-rank">#</th>
+            <th class="col-user">작성자</th>
+            <th class="col-text">본문</th>
+            <th class="col-num">좋아요</th>
+            <th class="col-num">댓글</th>
+            <th class="col-num">리포스트</th>
+            <th class="col-num">합산</th>
+            <th class="col-link">링크</th>
+          </tr>
+        </thead>
+        <tbody id="resultsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- History -->
+  <div class="history-section">
+    <h2>이전 수집 결과</h2>
+    <div class="history-list" id="historyList">
+      <div class="history-empty">불러오는 중...</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const form = document.getElementById('scrapeForm');
+const scrapeBtn = document.getElementById('scrapeBtn');
+const loading = document.getElementById('loading');
+const errorMsg = document.getElementById('errorMsg');
+const resultsSection = document.getElementById('resultsSection');
+const resultsTitle = document.getElementById('resultsTitle');
+const resultsMeta = document.getElementById('resultsMeta');
+const resultsBody = document.getElementById('resultsBody');
+const historyList = document.getElementById('historyList');
+
+function showError(msg) {
+  errorMsg.textContent = msg;
+  errorMsg.classList.add('active');
+}
+
+function hideError() {
+  errorMsg.classList.remove('active');
+}
+
+function formatNumber(n) {
+  if (n >= 10000) return (n / 10000).toFixed(1) + '만';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+  return String(n);
+}
+
+function renderResults(data, title) {
+  const posts = data.data || [];
+  const meta = data.metadata || {};
+
+  if (!posts.length) {
+    showError('수집된 결과가 없습니다.');
+    resultsSection.classList.remove('active');
+    return;
+  }
+
+  resultsTitle.textContent = title || '수집 결과';
+  const keywords = (meta.keywords || []).join(', ');
+  const time = meta.scraped_at ? new Date(meta.scraped_at).toLocaleString('ko-KR') : '';
+  resultsMeta.textContent = `${keywords} | ${posts.length}건 | ${time}`;
+
+  resultsBody.innerHTML = '';
+  posts.forEach(function(post, i) {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td class="col-rank">' + (i + 1) + '</td>' +
+      '<td class="col-user">@' + escapeHtml(post.username) + '</td>' +
+      '<td class="col-text"><div class="text-preview">' + escapeHtml(post.text) + '</div></td>' +
+      '<td class="col-num">' + formatNumber(post.like_count) + '</td>' +
+      '<td class="col-num">' + formatNumber(post.reply_count) + '</td>' +
+      '<td class="col-num">' + formatNumber(post.repost_count) + '</td>' +
+      '<td class="col-num"><strong>' + formatNumber(post.engagement_total) + '</strong></td>' +
+      '<td class="col-link">' + (post.permalink ? '<a href="' + escapeHtml(post.permalink) + '" target="_blank" rel="noopener">열기</a>' : '-') + '</td>';
+    resultsBody.appendChild(tr);
+  });
+
+  resultsSection.classList.add('active');
+  resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  var div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// Submit handler
+form.addEventListener('submit', function(e) {
+  e.preventDefault();
+  hideError();
+
+  var keywords = document.getElementById('keywords').value.trim();
+  if (!keywords) { showError('키워드를 입력해주세요.'); return; }
+
+  var maxResults = parseInt(document.getElementById('maxResults').value) || 20;
+  var koreanOnly = document.getElementById('koreanOnly').checked;
+
+  scrapeBtn.disabled = true;
+  loading.classList.add('active');
+  resultsSection.classList.remove('active');
+
+  fetch('/api/scrape', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keywords: keywords, max_results: maxResults, korean_only: koreanOnly })
+  })
+  .then(function(res) { return res.json().then(function(d) { return { ok: res.ok, data: d }; }); })
+  .then(function(result) {
+    loading.classList.remove('active');
+    scrapeBtn.disabled = false;
+    if (!result.ok) {
+      showError(result.data.error || '수집 중 오류가 발생했습니다.');
+    } else {
+      renderResults(result.data, '수집 결과');
+      loadHistory();
+    }
+  })
+  .catch(function(err) {
+    loading.classList.remove('active');
+    scrapeBtn.disabled = false;
+    showError('서버 연결 오류: ' + err.message);
+  });
+});
+
+// History
+function loadHistory() {
+  fetch('/api/history')
+  .then(function(res) { return res.json(); })
+  .then(function(files) {
+    if (!files.length) {
+      historyList.innerHTML = '<div class="history-empty">저장된 결과가 없습니다.</div>';
+      return;
+    }
+    historyList.innerHTML = '';
+    files.forEach(function(f) {
+      var item = document.createElement('div');
+      item.className = 'history-item';
+      var keywords = (f.keywords || []).join(', ') || f.filename;
+      var time = f.scraped_at ? new Date(f.scraped_at).toLocaleString('ko-KR') : '';
+      item.innerHTML =
+        '<span class="hi-name">' + escapeHtml(keywords) + ' (' + f.total_items + '건)</span>' +
+        '<span class="hi-meta">' + escapeHtml(time || f.filename) + '</span>';
+      item.addEventListener('click', function() { loadResult(f.filename, keywords); });
+      historyList.appendChild(item);
+    });
+  })
+  .catch(function() {
+    historyList.innerHTML = '<div class="history-empty">목록을 불러올 수 없습니다.</div>';
+  });
+}
+
+function loadResult(filename, title) {
+  hideError();
+  loading.classList.add('active');
+  resultsSection.classList.remove('active');
+
+  fetch('/api/result/' + encodeURIComponent(filename))
+  .then(function(res) { return res.json().then(function(d) { return { ok: res.ok, data: d }; }); })
+  .then(function(result) {
+    loading.classList.remove('active');
+    if (!result.ok) {
+      showError(result.data.error || '파일을 불러올 수 없습니다.');
+    } else {
+      renderResults(result.data, title || filename);
+    }
+  })
+  .catch(function(err) {
+    loading.classList.remove('active');
+    showError('파일 로드 오류: ' + err.message);
+  });
+}
+
+// Init
+loadHistory();
+</script>
+</body>
+</html>
