@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request
@@ -12,8 +14,25 @@ from scraper import get_output_path, run_scrape
 
 app = Flask(__name__)
 RESULTS_DIR = "./scraping-results"
+LOG_DIR = "./logs"
 VALID_SOURCE_MODES = {"hybrid", "threads_api", "apify"}
 MAX_KEYWORDS = 10
+
+
+def configure_logging() -> None:
+    """Write operational diagnostics to ./logs/app.log without printing secrets."""
+    Path(LOG_DIR).mkdir(parents=True, exist_ok=True)
+    log_path = Path(LOG_DIR) / "app.log"
+    formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    if not any(isinstance(h, RotatingFileHandler) and getattr(h, "baseFilename", "") == str(log_path.resolve()) for h in root.handlers):
+        handler = RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
+
+
+configure_logging()
 
 
 @app.route("/")
@@ -63,7 +82,19 @@ def api_scrape():
         return jsonify({"error": "source_mode는 hybrid, threads_api, apify 중 하나여야 합니다."}), 400
 
     try:
+        app.logger.info(
+            "scrape_request keywords=%s max_results=%s korean_only=%s source_mode=%s",
+            keywords,
+            max_results,
+            korean_only,
+            source_mode,
+        )
         output = run_scrape(keywords, max_results, korean_only, source_mode)
+        app.logger.info(
+            "scrape_result total_items=%s source_reports=%s",
+            output.get("metadata", {}).get("total_items"),
+            json.dumps(output.get("metadata", {}).get("source_reports", []), ensure_ascii=False),
+        )
     except Exception:
         # Log server-side; return a generic message so internals aren't exposed.
         app.logger.exception("run_scrape failed")

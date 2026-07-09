@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 import os
 import re
 import sys
@@ -24,6 +25,7 @@ from typing import Any
 from apify_client import ApifyClient
 
 KST = timezone(timedelta(hours=9))
+logger = logging.getLogger(__name__)
 HANGUL_RE = re.compile(r"[\uAC00-\uD7A3\u3131-\u3163\u1100-\u11FF]")
 THREADS_BASE = "https://graph.threads.net/v1.0"
 THREADS_FIELDS = "id,text,media_type,permalink,timestamp,username,has_replies,is_quote_post,is_reply"
@@ -310,7 +312,15 @@ def scrape_threads_apify(keyword: str, max_results: int = 20, korean_only: bool 
         # Bound the Actor run and the wait so a stuck/queued run cannot block the
         # HTTP request indefinitely.
         actor_client = client.actor("themineworks/threads-scraper")
-        run = actor_client.call(run_input=run_input, **apify_run_bound_kwargs(actor_client))
+        run_kwargs = apify_run_bound_kwargs(actor_client)
+        logger.info(
+            "apify_start keyword=%s max_results=%s korean_only=%s run_kwargs=%s",
+            keyword,
+            max_results,
+            korean_only,
+            {k: str(v) for k, v in run_kwargs.items()},
+        )
+        run = actor_client.call(run_input=run_input, **run_kwargs)
         if not run:
             raise RuntimeError("Apify run did not finish within the wait bound")
         # apify-client v1/v2 returns a dict-like run object; older examples sometimes
@@ -319,11 +329,29 @@ def scrape_threads_apify(keyword: str, max_results: int = 20, korean_only: bool 
         dataset_id = run.get("defaultDatasetId") if isinstance(run, dict) else getattr(run, "default_dataset_id", None)
         if not dataset_id:
             dataset_id = run.get("default_dataset_id") if isinstance(run, dict) else None
+        run_status = run.get("status") if isinstance(run, dict) else getattr(run, "status", "")
+        run_id = run.get("id") if isinstance(run, dict) else getattr(run, "id", "")
+        logger.info("apify_run_finished keyword=%s run_id=%s status=%s dataset_id=%s", keyword, run_id, run_status, bool(dataset_id))
         if not dataset_id:
             raise RuntimeError("Apify run finished but default dataset id was not returned")
         items = list(client.dataset(dataset_id).iterate_items())
+        logger.info("apify_dataset keyword=%s run_id=%s status=%s items=%s", keyword, run_id, run_status, len(items))
+        if run_status and str(run_status).upper() != "SUCCEEDED" and not items:
+            meta.update({
+                "status": "error",
+                "run_status": run_status,
+                "run_id": run_id,
+                "received": 0,
+                "count": 0,
+                "error": {
+                    "type": "ApifyRunNotSucceeded",
+                    "message": "Apify Actor가 완료되지 않아 보강 결과를 가져오지 못했습니다.",
+                },
+            })
+            return [], meta
     except Exception as e:
         # Avoid leaking raw exception text (may embed URLs/tokens); keep the type.
+        logger.exception("apify_failed keyword=%s", keyword)
         meta.update({"status": "error", "error": {"type": type(e).__name__, "message": "Apify 수집 중 오류가 발생했습니다."}})
         return [], meta
 
@@ -362,7 +390,14 @@ def scrape_threads_apify(keyword: str, max_results: int = 20, korean_only: bool 
 
     posts.sort(key=lambda x: x["engagement_total"], reverse=True)
     result = posts[:max_results]
-    meta.update({"status": "ok", "received": len(items), "count": len(result), "korean_only": korean_only})
+    meta.update({
+        "status": "ok",
+        "run_status": run_status,
+        "run_id": run_id,
+        "received": len(items),
+        "count": len(result),
+        "korean_only": korean_only,
+    })
     return result, meta
 
 
