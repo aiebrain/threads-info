@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+.venv/
+.env
 .claude/
 scraping-results/
 config.json

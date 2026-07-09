@@ -112,6 +112,14 @@ tbody tr:hover { background: #fafafa; }
           <label for="maxResults">최대 건수</label>
           <input type="number" id="maxResults" value="20" min="1" max="100">
         </div>
+        <div class="form-group">
+          <label for="sourceMode">수집 방식</label>
+          <select id="sourceMode" style="padding:10px 14px;border:1px solid #ddd;border-radius:8px;font-size:0.95rem;">
+            <option value="hybrid" selected>추천 조합: 공식 API + Apify</option>
+            <option value="threads_api">공식 API 후보만</option>
+            <option value="apify">Apify 원문/수치만</option>
+          </select>
+        </div>
         <div class="checkbox-group">
           <input type="checkbox" id="koreanOnly" checked>
           <label for="koreanOnly">한국어만</label>
@@ -143,7 +151,8 @@ tbody tr:hover { background: #fafafa; }
           <tr>
             <th class="col-rank">#</th>
             <th class="col-user">작성자</th>
-            <th class="col-text">본문</th>
+            <th>출처</th>
+            <th class="col-text">본문/검증 메모</th>
             <th class="col-num">좋아요</th>
             <th class="col-num">댓글</th>
             <th class="col-num">리포스트</th>
@@ -209,15 +218,17 @@ function renderResults(data, title) {
   resultsBody.innerHTML = '';
   posts.forEach(function(post, i) {
     const tr = document.createElement('tr');
+    const displayText = post.text || post.notes || '(공식 API ID-only 후보: 공개 페이지 검증 필요)';
     tr.innerHTML =
       '<td class="col-rank">' + (i + 1) + '</td>' +
-      '<td class="col-user">@' + escapeHtml(post.username) + '</td>' +
-      '<td class="col-text"><div class="text-preview">' + escapeHtml(post.text) + '</div></td>' +
-      '<td class="col-num">' + formatNumber(post.like_count) + '</td>' +
-      '<td class="col-num">' + formatNumber(post.reply_count) + '</td>' +
-      '<td class="col-num">' + formatNumber(post.repost_count) + '</td>' +
-      '<td class="col-num"><strong>' + formatNumber(post.engagement_total) + '</strong></td>' +
-      '<td class="col-link">' + (post.permalink ? '<a href="' + escapeHtml(post.permalink) + '" target="_blank" rel="noopener">열기</a>' : '-') + '</td>';
+      '<td class="col-user">' + (post.username ? '@' + escapeHtml(post.username) : '-') + '</td>' +
+      '<td>' + escapeHtml(post.source || '-') + '</td>' +
+      '<td class="col-text"><div class="text-preview">' + escapeHtml(displayText) + '</div></td>' +
+      '<td class="col-num">' + formatNumber(post.like_count || 0) + '</td>' +
+      '<td class="col-num">' + formatNumber(post.reply_count || 0) + '</td>' +
+      '<td class="col-num">' + formatNumber(post.repost_count || 0) + '</td>' +
+      '<td class="col-num"><strong>' + formatNumber(post.engagement_total || 0) + '</strong></td>' +
+      '<td class="col-link">' + (isSafeThreadsUrl(post.permalink) ? '<a href="' + escapeHtml(post.permalink) + '" target="_blank" rel="noopener">열기</a>' : '-') + '</td>';
     resultsBody.appendChild(tr);
   });
 
@@ -232,6 +243,16 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+function isSafeThreadsUrl(url) {
+  if (!url) return false;
+  try {
+    var u = new URL(url);
+    return u.protocol === 'https:' && (u.hostname === 'www.threads.com' || u.hostname === 'www.threads.net' || u.hostname === 'threads.com' || u.hostname === 'threads.net');
+  } catch (e) {
+    return false;
+  }
+}
+
 // Submit handler
 form.addEventListener('submit', function(e) {
   e.preventDefault();
@@ -242,6 +263,7 @@ form.addEventListener('submit', function(e) {
 
   var maxResults = parseInt(document.getElementById('maxResults').value) || 20;
   var koreanOnly = document.getElementById('koreanOnly').checked;
+  var sourceMode = document.getElementById('sourceMode').value;
 
   scrapeBtn.disabled = true;
   loading.classList.add('active');
@@ -250,7 +272,7 @@ form.addEventListener('submit', function(e) {
   fetch('/api/scrape', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ keywords: keywords, max_results: maxResults, korean_only: koreanOnly })
+    body: JSON.stringify({ keywords: keywords, max_results: maxResults, korean_only: koreanOnly, source_mode: sourceMode })
   })
   .then(function(res) { return res.json().then(function(d) { return { ok: res.ok, data: d }; }); })
   .then(function(result) {
