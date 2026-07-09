@@ -12,6 +12,29 @@
   - 제한: 외부 Actor 의존, 비용/필드 변경 가능성이 있습니다.
 - `hybrid`: 추천 모드입니다. 공식 API 후보 + Apify 보강 결과를 합쳐 저장합니다.
 
+## 사전 준비
+
+필수:
+
+- Python 3.10+ 권장
+- `pip`, `venv`
+- 인터넷 연결
+- Apify 계정 및 API token
+  - `https://console.apify.com/settings/integrations` → API token 복사
+  - `hybrid`/`apify` 모드에서 원문·링크·반응수치·발행시간 보강에 필요합니다.
+
+선택:
+
+- Meta Threads API access token
+  - `threads_api`/`hybrid` 모드에서 공식 API 후보 수집에 필요합니다.
+  - 앱 권한/검수 상태에 따라 public post 전체 필드는 제한될 수 있고, 이 경우 ID-only 후보로 저장됩니다.
+
+필요 없는 것:
+
+- 별도 데이터베이스 없음
+- 별도 브라우저 자동화/Chrome 설치 필요 없음
+- Node.js 필요 없음
+
 ## 설치
 
 ```bash
@@ -21,6 +44,8 @@ python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+Windows 폴더에 사본을 두고 WSL에서 실행하는 경우에도 같은 방식으로 해당 폴더에서 `.venv`를 만들면 됩니다.
 
 ## 설정
 
