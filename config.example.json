@@ -2,6 +2,7 @@
   "source_mode": "hybrid",
   "keywords": ["AI", "자동화"],
   "max_results_per_keyword": 20,
+  "recent_days": 7,
   "korean_only": true,
   "apify_token": ""
 }

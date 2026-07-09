@@ -58,6 +58,19 @@ def parse_max_results(value) -> int:
     return min(parsed, 100)
 
 
+def parse_recent_days(value) -> int | None:
+    """Parse recent-date filter. None means all periods."""
+    if value in (None, "", "all", "none", 0, "0"):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("기간 필터는 전체, 3일, 7일, 30일 중 하나여야 합니다.")
+    if parsed not in {3, 7, 30}:
+        raise ValueError("기간 필터는 전체, 3일, 7일, 30일 중 하나여야 합니다.")
+    return parsed
+
+
 @app.route("/api/scrape", methods=["POST"])
 def api_scrape():
     """키워드로 Threads 인기글 후보를 수집한다."""
@@ -77,19 +90,24 @@ def api_scrape():
         return jsonify({"error": str(e)}), 400
 
     korean_only = bool(data.get("korean_only", False))
+    try:
+        recent_days = parse_recent_days(data.get("recent_days", 7))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     source_mode = str(data.get("source_mode", "hybrid") or "hybrid")
     if source_mode not in VALID_SOURCE_MODES:
         return jsonify({"error": "source_mode는 hybrid, threads_api, apify 중 하나여야 합니다."}), 400
 
     try:
         app.logger.info(
-            "scrape_request keywords=%s max_results=%s korean_only=%s source_mode=%s",
+            "scrape_request keywords=%s max_results=%s korean_only=%s recent_days=%s source_mode=%s",
             keywords,
             max_results,
             korean_only,
+            recent_days,
             source_mode,
         )
-        output = run_scrape(keywords, max_results, korean_only, source_mode)
+        output = run_scrape(keywords, max_results, korean_only, source_mode, recent_days)
         app.logger.info(
             "scrape_result total_items=%s source_reports=%s",
             output.get("metadata", {}).get("total_items"),

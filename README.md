@@ -73,6 +73,7 @@ FLASK_DEBUG=0
   "source_mode": "hybrid",
   "keywords": ["AI", "자동화"],
   "max_results_per_keyword": 20,
+  "recent_days": 7,
   "korean_only": true,
   "apify_token": ""
 }
@@ -112,6 +113,15 @@ curl -s -X POST http://127.0.0.1:5000/api/scrape \
   -H 'Content-Type: application/json' \
   -d '{"keywords":"AI 자동화, 상세페이지", "max_results": 10, "korean_only": true, "source_mode":"hybrid"}'
 ```
+
+## 기간 필터
+
+웹 UI에서 최근 3일, 최근 1주일, 최근 1개월, 전체 기간을 선택할 수 있습니다.
+
+- 기본값은 최근 1주일입니다.
+- 기간 필터는 `timestamp`/발행시간이 있는 결과에 적용됩니다.
+- 공식 API ID-only 후보처럼 발행시간이 없는 row는 최근 기간을 증명할 수 없으므로 기간 필터가 켜져 있을 때 제외됩니다.
+- Apify가 오래된 글을 섞어 반환해도 앱이 후처리로 기간 밖 글을 제거합니다.
 
 ## 결과 필드
 

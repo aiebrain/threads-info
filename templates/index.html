@@ -121,6 +121,15 @@ tbody tr:hover { background: #fafafa; }
             <option value="apify">Apify 원문/수치만</option>
           </select>
         </div>
+        <div class="form-group">
+          <label for="recentDays">수집 기간</label>
+          <select id="recentDays" style="padding:10px 14px;border:1px solid #ddd;border-radius:8px;font-size:0.95rem;">
+            <option value="3">최근 3일</option>
+            <option value="7" selected>최근 1주일</option>
+            <option value="30">최근 1개월</option>
+            <option value="all">전체</option>
+          </select>
+        </div>
         <div class="checkbox-group">
           <input type="checkbox" id="koreanOnly" checked>
           <label for="koreanOnly">한국어만</label>
@@ -223,7 +232,9 @@ function renderResults(data, title) {
   resultsTitle.textContent = title || '수집 결과';
   const keywords = (meta.keywords || []).join(', ');
   const time = meta.scraped_at ? new Date(meta.scraped_at).toLocaleString('ko-KR') : '';
-  resultsMeta.textContent = `${keywords} | ${posts.length}건 | ${time}`;
+  const period = meta.recent_days ? '최근 ' + meta.recent_days + '일' : '전체 기간';
+  const dropped = meta.date_filter && meta.date_filter.enabled ? ' · 기간밖/시간없음 제외 ' + ((meta.date_filter.dropped_out_of_range || 0) + (meta.date_filter.dropped_no_timestamp || 0)) + '건' : '';
+  resultsMeta.textContent = `${keywords} | ${posts.length}건 | ${period}${dropped} | ${time}`;
 
   resultsBody.innerHTML = '';
   posts.forEach(function(post, i) {
@@ -275,6 +286,7 @@ form.addEventListener('submit', function(e) {
   var maxResults = parseInt(document.getElementById('maxResults').value) || 20;
   var koreanOnly = document.getElementById('koreanOnly').checked;
   var sourceMode = document.getElementById('sourceMode').value;
+  var recentDays = document.getElementById('recentDays').value;
 
   scrapeBtn.disabled = true;
   loading.classList.add('active');
@@ -283,7 +295,7 @@ form.addEventListener('submit', function(e) {
   fetch('/api/scrape', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ keywords: keywords, max_results: maxResults, korean_only: koreanOnly, source_mode: sourceMode })
+    body: JSON.stringify({ keywords: keywords, max_results: maxResults, korean_only: koreanOnly, source_mode: sourceMode, recent_days: recentDays })
   })
   .then(function(res) { return res.json().then(function(d) { return { ok: res.ok, data: d }; }); })
   .then(function(result) {

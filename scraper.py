@@ -212,6 +212,60 @@ def http_get_json(url: str) -> tuple[bool, dict[str, Any]]:
         return False, {"error": str(e)}
 
 
+def parse_post_timestamp(value: Any) -> datetime | None:
+    """Parse row timestamp into timezone-aware datetime for recent-period filtering."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    try:
+        # Threads/Apify usually return ISO strings ending in Z.
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(KST)
+
+
+def filter_recent_rows(rows: list[dict[str, Any]], recent_days: int | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Keep only rows with timestamp in the recent window.
+
+    Rows without timestamp are dropped when a recent filter is active because
+    they cannot be proven recent. This intentionally removes official API
+    ID-only candidates from recent-data views.
+    """
+    if not recent_days:
+        return rows, {"enabled": False, "recent_days": None, "before_count": len(rows), "after_count": len(rows), "dropped_no_timestamp": 0, "dropped_out_of_range": 0}
+
+    now = datetime.now(KST)
+    lower_bound = now - timedelta(days=recent_days)
+    # Small grace window for clock skew or provider timestamps around now.
+    upper_bound = now + timedelta(hours=6)
+    kept: list[dict[str, Any]] = []
+    dropped_no_timestamp = 0
+    dropped_out_of_range = 0
+    for row in rows:
+        dt = parse_post_timestamp(row.get("timestamp"))
+        if not dt:
+            dropped_no_timestamp += 1
+            continue
+        if lower_bound <= dt <= upper_bound:
+            kept.append(row)
+        else:
+            dropped_out_of_range += 1
+
+    return kept, {
+        "enabled": True,
+        "recent_days": recent_days,
+        "from": lower_bound.isoformat(),
+        "to": upper_bound.isoformat(),
+        "before_count": len(rows),
+        "after_count": len(kept),
+        "dropped_no_timestamp": dropped_no_timestamp,
+        "dropped_out_of_range": dropped_out_of_range,
+    }
+
+
 def normalize_api_row(row: dict[str, Any], keyword: str, mode: str) -> dict[str, Any]:
     text = row.get("text") or ""
     post_id = row.get("id", "")
@@ -419,7 +473,7 @@ def dedupe_results(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return merged
 
 
-def run_scrape(keywords: list[str], max_results: int = 20, korean_only: bool = False, source_mode: str = "hybrid") -> dict[str, Any]:
+def run_scrape(keywords: list[str], max_results: int = 20, korean_only: bool = False, source_mode: str = "hybrid", recent_days: int | None = 7) -> dict[str, Any]:
     """키워드 리스트로 Threads 인기글 후보를 수집하고 결과 dict를 반환한다."""
     load_environment()
     config = load_config()
@@ -440,6 +494,10 @@ def run_scrape(keywords: list[str], max_results: int = 20, korean_only: bool = F
             all_results.extend(apify_rows)
 
     all_results = dedupe_results(all_results)
+    all_results, date_filter_report = filter_recent_rows(all_results, recent_days)
+    if date_filter_report.get("enabled"):
+        source_reports.append({"source": "date_filter", **date_filter_report})
+    logger.info("date_filter report=%s", json.dumps(date_filter_report, ensure_ascii=False))
 
     output = {
         "metadata": {
@@ -448,6 +506,8 @@ def run_scrape(keywords: list[str], max_results: int = 20, korean_only: bool = F
             "scraped_at": datetime.now(KST).isoformat(),
             "fetcher": "hybrid: official Threads API candidates + Apify enrichment",
             "source_mode": source_mode,
+            "recent_days": recent_days,
+            "date_filter": date_filter_report,
             "total_items": len(all_results),
             "source_reports": source_reports,
         },
@@ -463,8 +523,13 @@ def main() -> str:
     max_results = int(config.get("max_results_per_keyword", 20))
     korean_only = bool(config.get("korean_only", False))
     source_mode = config.get("source_mode", "hybrid")
+    recent_days = config.get("recent_days", 7)
+    if recent_days in ("", "all", "none", 0, "0"):
+        recent_days = None
+    elif recent_days is not None:
+        recent_days = int(recent_days)
 
-    output = run_scrape(keywords, max_results, korean_only, source_mode)
+    output = run_scrape(keywords, max_results, korean_only, source_mode, recent_days)
     if not output["data"]:
         print("\n[ERROR] 수집된 결과가 없습니다.")
         sys.exit(1)
