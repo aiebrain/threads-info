@@ -195,7 +195,15 @@ def scrape_threads_apify(keyword: str, max_results: int = 20, korean_only: bool 
 
     try:
         run = client.actor("themineworks/threads-scraper").call(run_input=run_input)
-        items = list(client.dataset(run.default_dataset_id).iterate_items())
+        # apify-client v1/v2 returns a dict-like run object; older examples sometimes
+        # show attribute access. Support both so the scraper does not fail after the
+        # Actor succeeds.
+        dataset_id = run.get("defaultDatasetId") if isinstance(run, dict) else getattr(run, "default_dataset_id", None)
+        if not dataset_id:
+            dataset_id = run.get("default_dataset_id") if isinstance(run, dict) else None
+        if not dataset_id:
+            raise RuntimeError("Apify run finished but default dataset id was not returned")
+        items = list(client.dataset(dataset_id).iterate_items())
     except Exception as e:
         meta.update({"status": "error", "error": str(e)})
         return [], meta
