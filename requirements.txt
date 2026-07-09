@@ -1,4 +1,2 @@
-scrapling
-jmespath
-nested-lookup
+apify-client
 flask

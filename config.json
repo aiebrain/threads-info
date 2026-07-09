@@ -1,7 +1,0 @@
-{
-  "keywords": ["AI 강사"],
-  "max_results_per_keyword": 20,
-  "request_delay_sec": [2, 3],
-  "sort_by": "engagement_total",
-  "korean_only": true
-}
